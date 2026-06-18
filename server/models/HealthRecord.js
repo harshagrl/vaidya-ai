@@ -4,7 +4,7 @@ const { FIELD_TOKENS } = require('../config/constants');
 // CONVENTION: Any String field below that Gemini Vision cannot read should be explicitly 
 // set to FIELD_TOKENS.UNREADABLE rather than null/empty string, so the UI can highlight it.
 const medicineSchema = new mongoose.Schema({
-  medicineName: { type: String },
+  medicineName: { type: String, required: true },
   dosage: { type: String },
   frequency: { type: String },
   duration: { type: String },
@@ -15,8 +15,8 @@ const medicineSchema = new mongoose.Schema({
 // CONVENTION: Any String field below that Gemini Vision cannot read should be explicitly 
 // set to FIELD_TOKENS.UNREADABLE rather than null/empty string, so the UI can highlight it.
 const labTestSchema = new mongoose.Schema({
-  testName: { type: String },
-  value: { type: String },
+  testName: { type: String, required: true },
+  value: { type: String, required: true },
   unit: { type: String },
   referenceRange: { type: String },
   isAbnormalFlag: { type: Boolean },
@@ -41,20 +41,24 @@ const healthRecordSchema = new mongoose.Schema({
 
 // Pre-save validation hook to ensure correct arrays are populated based on record type
 healthRecordSchema.pre('save', function(next) {
+  let err = null;
   if (this.type === 'PRESCRIPTION') {
     if (!this.medicines || this.medicines.length === 0) {
-      return next(new Error('A PRESCRIPTION must have at least one medicine.'));
-    }
-    if (this.labTests && this.labTests.length > 0) {
-      return next(new Error('A PRESCRIPTION cannot have lab tests attached.'));
+      err = new Error('A PRESCRIPTION must have at least one medicine.');
+    } else if (this.labTests && this.labTests.length > 0) {
+      err = new Error('A PRESCRIPTION cannot have lab tests attached.');
     }
   } else if (this.type === 'LAB_REPORT') {
     if (!this.labTests || this.labTests.length === 0) {
-      return next(new Error('A LAB_REPORT must have at least one lab test.'));
+      err = new Error('A LAB_REPORT must have at least one lab test.');
+    } else if (this.medicines && this.medicines.length > 0) {
+      err = new Error('A LAB_REPORT cannot have medicines attached.');
     }
-    if (this.medicines && this.medicines.length > 0) {
-      return next(new Error('A LAB_REPORT cannot have medicines attached.'));
-    }
+  }
+
+  if (err) {
+    err.isRecordValidation = true;
+    return next(err);
   }
   next();
 });
