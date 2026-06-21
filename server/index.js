@@ -20,6 +20,7 @@ app.use(express.json({ extended: false }));
 // Define Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/upload', require('./routes/upload'));
+app.use('/api/profiles', require('./routes/profiles'));
 app.use('/api/profiles/:profileId/records', require('./routes/records'));
 
 const PORT = process.env.PORT || 5000;
