@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import api from '../api/axiosInstance';
 import { useAuth } from '../context/AuthContext';
-import { Save, Plus, Trash2, Loader2, FileText, FlaskConical, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Save, Plus, Trash2, Loader2, FileText, FlaskConical, CheckCircle2, AlertCircle, AlertTriangle } from 'lucide-react';
 
 export default function ManualEntry() {
   const { activeProfileId } = useAuth();
@@ -9,6 +9,9 @@ export default function ManualEntry() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState(null);
   const [successMsg, setSuccessMsg] = useState(null);
+  const [showInteractionModal, setShowInteractionModal] = useState(false);
+  const [pendingInteractions, setPendingInteractions] = useState([]);
+  const [minorInteractionsCount, setMinorInteractionsCount] = useState(0);
 
   const initialPrescriptionState = {
     prescribedDate: '',
@@ -80,47 +83,30 @@ export default function ManualEntry() {
     />
   );
 
-  const handleSave = async (e) => {
-    e.preventDefault();
-    if (!activeProfileId) {
-      setError('Please select a family member profile from the top header first.');
-      return;
-    }
-
-    if (activeTab === 'PRESCRIPTION' && (!formData.medicines || formData.medicines.length === 0)) {
-      setError('A prescription must have at least one medicine.');
-      return;
-    }
-    if (activeTab === 'LAB_REPORT' && (!formData.labTests || formData.labTests.length === 0)) {
-      setError('A lab report must have at least one test.');
-      return;
-    }
-
-    // Basic validation for required top-level fields
-    if (activeTab === 'PRESCRIPTION' && (!formData.prescribedDate || !formData.prescribingDoctor)) {
-      setError('Please fill in both Date and Doctor Name.');
-      return;
-    }
-    if (activeTab === 'LAB_REPORT' && !formData.testDate) {
-      setError('Please fill in the Test Date.');
-      return;
-    }
-
-    // Row-level validation for required sub-fields
+  const validateForm = () => {
+    if (!activeProfileId) return 'Please select a family member profile from the top header first.';
+    if (activeTab === 'PRESCRIPTION' && (!formData.medicines || formData.medicines.length === 0)) return 'A prescription must have at least one medicine.';
+    if (activeTab === 'LAB_REPORT' && (!formData.labTests || formData.labTests.length === 0)) return 'A lab report must have at least one test.';
+    if (activeTab === 'PRESCRIPTION' && (!formData.prescribedDate || !formData.prescribingDoctor)) return 'Please fill in both Date and Doctor Name.';
+    if (activeTab === 'LAB_REPORT' && !formData.testDate) return 'Please fill in the Test Date.';
+    
     if (activeTab === 'PRESCRIPTION') {
-      const hasEmptyMedicine = formData.medicines.some(m => !m.medicineName || m.medicineName.trim() === '');
-      if (hasEmptyMedicine) {
-        setError('Please provide a Medicine Name for all added rows.');
-        return;
-      }
+      if (formData.medicines.some(m => !m.medicineName || m.medicineName.trim() === '')) return 'Please provide a Medicine Name for all added rows.';
     }
     
     if (activeTab === 'LAB_REPORT') {
-      const hasEmptyLabTest = formData.labTests.some(t => !t.testName || t.testName.trim() === '' || !t.value || t.value.trim() === '');
-      if (hasEmptyLabTest) {
-        setError('Please provide a Test Name and Value for all added rows.');
-        return;
-      }
+      if (formData.labTests.some(t => !t.testName || t.testName.trim() === '' || !t.value || t.value.trim() === '')) return 'Please provide a Test Name and Value for all added rows.';
+    }
+    return null;
+  };
+
+  const handleSave = async (e) => {
+    if (e) e.preventDefault();
+    
+    const validationError = validateForm();
+    if (validationError) {
+      setError(validationError);
+      return;
     }
 
     setIsSaving(true);
@@ -139,13 +125,60 @@ export default function ManualEntry() {
         setFormData(activeTab === 'PRESCRIPTION' ? initialPrescriptionState : initialLabReportState);
       }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to save record. Please ensure all required fields are filled.');
+      if (err.response?.status === 409 && err.response?.data?.interactions) {
+        const severe = err.response.data.interactions.filter(i => i.severity === 'Severe/Contraindicated');
+        const minorCount = err.response.data.interactions.length - severe.length;
+        setPendingInteractions(severe);
+        setMinorInteractionsCount(minorCount);
+        setShowInteractionModal(true);
+      } else {
+        setError(err.response?.data?.message || 'Failed to save record. Please ensure all required fields are filled.');
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleAcknowledgeAndSave = async () => {
+    const validationError = validateForm();
+    if (validationError) {
+      setError(validationError);
+      setShowInteractionModal(false);
+      return;
+    }
+
+    setShowInteractionModal(false);
+    setIsSaving(true);
+    setError(null);
+    setSuccessMsg(null);
+
+    const acknowledgedInteractions = pendingInteractions.map(i => ({
+      medicineA: i.medicineA,
+      medicineB: i.medicineB,
+      severity: i.severity
+    }));
+
+    try {
+      const payload = {
+        type: activeTab,
+        ...formData,
+        acknowledgedInteractions
+      };
+      
+      const response = await api.post(`/api/profiles/${activeProfileId}/records`, payload);
+      if (response.data.success) {
+        setSuccessMsg('Record saved successfully!');
+        setFormData(activeTab === 'PRESCRIPTION' ? initialPrescriptionState : initialLabReportState);
+      }
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to save record.');
     } finally {
       setIsSaving(false);
     }
   };
 
   return (
+    <>
     <div className="max-w-4xl mx-auto mt-8 bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
       <div className="border-b border-gray-200 bg-gray-50 p-6 pb-0">
         <h2 className="text-2xl font-bold text-gray-800 mb-2">Manual Entry</h2>
@@ -339,5 +372,54 @@ export default function ManualEntry() {
         </div>
       </form>
     </div>
+
+    {/* Interaction Warning Modal */}
+    {showInteractionModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+        <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden border border-red-100">
+          <div className="bg-red-50 border-b border-red-100 p-4 flex items-center gap-3">
+            <AlertTriangle className="w-6 h-6 text-red-600 flex-shrink-0" />
+            <h3 className="text-lg font-bold text-red-900">Severe Interactions Detected</h3>
+          </div>
+          <div className="p-6">
+            <p className="text-sm text-gray-700 mb-4">
+              The following severe drug interactions or contraindications were found between the medicines you are trying to save and the active medicines on this profile.
+            </p>
+            <ul className="space-y-3 mb-4">
+              {pendingInteractions.map((i, idx) => (
+                <li key={idx} className="bg-red-50 border border-red-200 p-3 rounded-lg text-sm text-red-800">
+                  <strong>{i.medicineA}</strong> + <strong>{i.medicineB}</strong>: {i.description}
+                </li>
+              ))}
+            </ul>
+            {minorInteractionsCount > 0 && (
+              <p className="text-sm text-amber-600 font-medium mb-6">
+                Note: {minorInteractionsCount} Minor/Moderate interaction(s) were also detected. These will be saved to your timeline for review.
+              </p>
+            )}
+            <p className="text-sm text-gray-700 font-medium mb-6">
+              Are you sure you want to proceed and save this prescription?
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowInteractionModal(false)}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                Cancel & Edit
+              </button>
+              <button
+                type="button"
+                onClick={handleAcknowledgeAndSave}
+                className="px-4 py-2 bg-red-600 border border-transparent rounded-lg text-sm font-medium text-white hover:bg-red-700 transition-colors"
+              >
+                Acknowledge & Save
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

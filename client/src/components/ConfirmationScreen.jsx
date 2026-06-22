@@ -1,17 +1,16 @@
 import React, { useState } from 'react';
 import api from '../api/axiosInstance';
 import { useAuth } from '../context/AuthContext';
-import { Save, X, AlertCircle, Image as ImageIcon, Plus, Trash2, Loader2 } from 'lucide-react';
+import { Save, X, AlertCircle, Image as ImageIcon, Plus, Trash2, Loader2, AlertTriangle } from 'lucide-react';
 
 const UNREADABLE = 'UNREADABLE';
 
 export default function ConfirmationScreen({ draftData, type, sourceImageUrl, onSaveSuccess, onCancel }) {
   const { activeProfileId } = useAuth();
-  
-  // Clone draft data deeply to avoid mutating props
-  const [formData, setFormData] = useState(JSON.parse(JSON.stringify(draftData)));
-  const [error, setError] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [showInteractionModal, setShowInteractionModal] = useState(false);
+  const [pendingInteractions, setPendingInteractions] = useState([]);
+  const [minorInteractionsCount, setMinorInteractionsCount] = useState(0);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -67,25 +66,18 @@ export default function ConfirmationScreen({ draftData, type, sourceImageUrl, on
     );
   };
 
+  const validateForm = () => {
+    if (!activeProfileId) return 'Please select a family member profile. (Note: Profile switcher UI pending)';
+    if (type === 'PRESCRIPTION' && (!formData.medicines || formData.medicines.length === 0)) return 'A prescription must have at least one medicine. Please add one before saving.';
+    if (type === 'LAB_REPORT' && (!formData.labTests || formData.labTests.length === 0)) return 'A lab report must have at least one lab test. Please add one before saving.';
+    if (hasUnreadableValues(formData)) return 'Please fill in all unreadable or missing fields (highlighted in red) before saving.';
+    return null;
+  };
+
   const handleSave = async () => {
-    const targetProfileId = activeProfileId;
-    if (!targetProfileId) {
-      setError('Please select a family member profile. (Note: Profile switcher UI pending)');
-      return;
-    }
-
-    // Client-side empty array validation
-    if (type === 'PRESCRIPTION' && (!formData.medicines || formData.medicines.length === 0)) {
-      setError('A prescription must have at least one medicine. Please add one before saving.');
-      return;
-    }
-    if (type === 'LAB_REPORT' && (!formData.labTests || formData.labTests.length === 0)) {
-      setError('A lab report must have at least one lab test. Please add one before saving.');
-      return;
-    }
-
-    if (hasUnreadableValues(formData)) {
-      setError('Please fill in all unreadable or missing fields (highlighted in red) before saving.');
+    const validationError = validateForm();
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -103,6 +95,50 @@ export default function ConfirmationScreen({ draftData, type, sourceImageUrl, on
         onSaveSuccess(response.data.data);
       }
     } catch (err) {
+      if (err.response?.status === 409 && err.response?.data?.interactions) {
+        const severe = err.response.data.interactions.filter(i => i.severity === 'Severe/Contraindicated');
+        const minorCount = err.response.data.interactions.length - severe.length;
+        setPendingInteractions(severe);
+        setMinorInteractionsCount(minorCount);
+        setShowInteractionModal(true);
+      } else {
+        setError(err.response?.data?.message || 'Failed to save record.');
+      }
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleAcknowledgeAndSave = async () => {
+    const validationError = validateForm();
+    if (validationError) {
+      setError(validationError);
+      setShowInteractionModal(false);
+      return;
+    }
+
+    setShowInteractionModal(false);
+    setIsSaving(true);
+    setError(null);
+
+    const acknowledgedInteractions = pendingInteractions.map(i => ({
+      medicineA: i.medicineA,
+      medicineB: i.medicineB,
+      severity: i.severity
+    }));
+
+    try {
+      const payload = {
+        type,
+        sourceImageUrl,
+        ...formData,
+        acknowledgedInteractions
+      };
+      const response = await api.post(`/api/profiles/${activeProfileId}/records`, payload);
+      if (response.data.success) {
+        onSaveSuccess(response.data.data);
+      }
+    } catch (err) {
       setError(err.response?.data?.message || 'Failed to save record.');
     } finally {
       setIsSaving(false);
@@ -110,7 +146,8 @@ export default function ConfirmationScreen({ draftData, type, sourceImageUrl, on
   };
 
   return (
-    <div className="max-w-6xl mx-auto mt-8 bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden flex flex-col md:flex-row">
+    <>
+      <div className="max-w-6xl mx-auto mt-8 bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden flex flex-col md:flex-row">
       
       {/* Left Column: Image Viewer */}
       <div className="w-full md:w-1/2 bg-gray-50 border-r border-gray-200 p-6 flex flex-col">
@@ -311,6 +348,54 @@ export default function ConfirmationScreen({ draftData, type, sourceImageUrl, on
           </button>
         </div>
       </div>
+      </div>
     </div>
+
+    {/* Interaction Warning Modal */}
+    {showInteractionModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+        <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full overflow-hidden border border-red-100">
+          <div className="bg-red-50 border-b border-red-100 p-4 flex items-center gap-3">
+            <AlertTriangle className="w-6 h-6 text-red-600 flex-shrink-0" />
+            <h3 className="text-lg font-bold text-red-900">Severe Interactions Detected</h3>
+          </div>
+          <div className="p-6">
+            <p className="text-sm text-gray-700 mb-4">
+              The following severe drug interactions or contraindications were found between the medicines you are trying to save and the active medicines on this profile.
+            </p>
+            <ul className="space-y-3 mb-4">
+              {pendingInteractions.map((i, idx) => (
+                <li key={idx} className="bg-red-50 border border-red-200 p-3 rounded-lg text-sm text-red-800">
+                  <strong>{i.medicineA}</strong> + <strong>{i.medicineB}</strong>: {i.description}
+                </li>
+              ))}
+            </ul>
+            {minorInteractionsCount > 0 && (
+              <p className="text-sm text-amber-600 font-medium mb-6">
+                Note: {minorInteractionsCount} Minor/Moderate interaction(s) were also detected. These will be saved to your timeline for review.
+              </p>
+            )}
+            <p className="text-sm text-gray-700 font-medium mb-6">
+              Are you sure you want to proceed and save this prescription?
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowInteractionModal(false)}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                Cancel & Edit
+              </button>
+              <button
+                onClick={handleAcknowledgeAndSave}
+                className="px-4 py-2 bg-red-600 border border-transparent rounded-lg text-sm font-medium text-white hover:bg-red-700 transition-colors"
+              >
+                Acknowledge & Save
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

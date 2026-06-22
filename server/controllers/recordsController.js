@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const HealthRecord = require('../models/HealthRecord');
 const FamilyMember = require('../models/FamilyMember');
+const { checkInteractions } = require('../services/interactionService');
 
 /**
  * Controller for POST /api/profiles/:profileId/records
@@ -44,9 +45,40 @@ async function createRecord(req, res) {
         }
       }
 
+      // Interaction checking logic
+      const { interactions, uncheckedMedicines } = await checkInteractions(profileId, medicines);
+      const severeInteractions = interactions.filter(i => i.severity === 'Severe/Contraindicated');
+
+      if (severeInteractions.length > 0) {
+        // Validate acknowledgedInteractions bypass
+        const { acknowledgedInteractions } = req.body;
+        
+        let allAcknowledged = false;
+        if (acknowledgedInteractions && Array.isArray(acknowledgedInteractions)) {
+          allAcknowledged = severeInteractions.every(si => {
+            return acknowledgedInteractions.some(ai => 
+              ai.severity === 'Severe/Contraindicated' &&
+              ((ai.medicineA === si.medicineA && ai.medicineB === si.medicineB) ||
+               (ai.medicineA === si.medicineB && ai.medicineB === si.medicineA))
+            );
+          });
+        }
+
+        if (!allAcknowledged) {
+          return res.status(409).json({
+            success: false,
+            message: 'Severe drug interactions detected. Please acknowledge the warnings to proceed.',
+            interactions,
+            uncheckedMedicines
+          });
+        }
+      }
+
       recordData.prescribedDate = prescribedDate;
       recordData.prescribingDoctor = prescribingDoctor;
       recordData.medicines = medicines;
+      recordData.interactions = interactions;
+      recordData.uncheckedMedicines = uncheckedMedicines;
     } else if (type === 'LAB_REPORT') {
       // Controller-level explicit check for empty subdocuments
       if (!labTests || !Array.isArray(labTests) || labTests.length === 0) {
@@ -91,4 +123,62 @@ async function createRecord(req, res) {
   }
 }
 
-module.exports = { createRecord };
+/**
+ * Controller for GET /api/profiles/:profileId/records
+ * Fetches health records for a profile with optional type and date filtering.
+ */
+async function getRecords(req, res) {
+  try {
+    const { profileId } = req.params;
+    const { type, startDate, endDate } = req.query;
+
+    if (!mongoose.Types.ObjectId.isValid(profileId)) {
+      return res.status(400).json({ message: 'Invalid profile ID format.' });
+    }
+
+    const profile = await FamilyMember.findById(profileId);
+    if (!profile) {
+      return res.status(404).json({ message: 'Profile not found.' });
+    }
+
+    if (profile.accountId.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Not authorized to view records for this profile.' });
+    }
+
+    const query = { profileId };
+
+    if (type) {
+      query.type = type;
+    }
+
+    if (startDate || endDate) {
+      const dateCondition = {};
+      if (startDate) dateCondition.$gte = new Date(startDate);
+      if (endDate) dateCondition.$lte = new Date(endDate);
+
+      // Additive date filtering strictly to the medical event date
+      // We only fallback to createdAt if the medical event dates are explicitly missing
+      query.$or = [
+        { prescribedDate: dateCondition },
+        { testDate: dateCondition },
+        { prescribedDate: { $exists: false }, testDate: { $exists: false }, createdAt: dateCondition }
+      ];
+    }
+
+    // Sort descending so the timeline is chronological (newest first)
+    const records = await HealthRecord.find(query).sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      data: records
+    });
+  } catch (error) {
+    console.error('Get Records Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error fetching records'
+    });
+  }
+}
+
+module.exports = { createRecord, getRecords };

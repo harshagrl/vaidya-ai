@@ -1,6 +1,13 @@
 const mongoose = require('mongoose');
 const { FIELD_TOKENS } = require('../config/constants');
 
+const interactionWarningSchema = new mongoose.Schema({
+  medicineA: { type: String, required: true },
+  medicineB: { type: String, required: true },
+  severity: { type: String, required: true },
+  description: { type: String }
+});
+
 // CONVENTION: Any String field below that Gemini Vision cannot read should be explicitly 
 // set to FIELD_TOKENS.UNREADABLE rather than null/empty string, so the UI can highlight it.
 const medicineSchema = new mongoose.Schema({
@@ -32,6 +39,8 @@ const healthRecordSchema = new mongoose.Schema({
   prescribedDate: { type: Date },
   prescribingDoctor: { type: String },
   medicines: [medicineSchema],
+  interactions: [interactionWarningSchema],
+  uncheckedMedicines: [{ type: String }],
 
   // Specific to Lab Reports
   testDate: { type: Date },
