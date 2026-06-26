@@ -44,7 +44,10 @@ const healthRecordSchema = new mongoose.Schema({
 
   // Specific to Lab Reports
   testDate: { type: Date },
-  labTests: [labTestSchema]
+  labTests: [labTestSchema],
+
+  // RAG Pipeline Tracking
+  chunksGenerated: { type: Boolean, default: false }
 
 }, { timestamps: true });
 

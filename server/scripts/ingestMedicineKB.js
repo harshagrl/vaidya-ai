@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const MedicineKB = require('../models/MedicineKB');
 const InteractionsKB = require('../models/InteractionsKB');
 const connectDB = require('../config/db');
+const { generateEmbedding } = require('../services/embeddingService');
 require('dotenv').config();
 
 // MOCK DATASET (In a real scenario, this would be read from a CSV or JSON file)
@@ -28,6 +29,7 @@ async function ingestData() {
 
   let excludedCount = 0;
   let deduplicatedCount = 0;
+  let embeddingFailedCount = 0;
   const processedBrands = new Set();
 
   const validMedicines = [];
@@ -61,10 +63,24 @@ async function ingestData() {
     const rawSalts = item.composition.split('+');
     const cleanedSalts = rawSalts.map(salt => salt.trim().toUpperCase()).filter(salt => salt.length > 0);
 
+    const chunkText = `Medicine brand: ${item.brandName.trim()}. Generic composition (salts): ${cleanedSalts.join(', ')}. Typical uses: ${item.uses || 'Unknown'}.`;
+    let embedding = [];
+    try {
+      embedding = await generateEmbedding(chunkText);
+    } catch (e) {
+      console.warn(`[EXCLUDED] Warning: Could not generate embedding for ${item.brandName}.`);
+    }
+
+    if (!embedding || embedding.length === 0) {
+      embeddingFailedCount++;
+      continue;
+    }
+
     validMedicines.push({
       brandName: item.brandName.trim(),
       genericComposition: cleanedSalts,
-      uses: item.uses
+      uses: item.uses,
+      embedding
     });
   }
 
@@ -72,6 +88,7 @@ async function ingestData() {
   console.log(`Total Raw Medicines: ${rawIndianMedicines.length}`);
   console.log(`Excluded (Missing Composition): ${excludedCount}`);
   console.log(`Deduplicated: ${deduplicatedCount}`);
+  console.log(`Excluded (Embedding Failed): ${embeddingFailedCount}`);
   console.log(`Valid Medicines to Insert: ${validMedicines.length}`);
   console.log(`------------------------\n`);
 

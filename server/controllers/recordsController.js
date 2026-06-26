@@ -1,7 +1,9 @@
 const mongoose = require('mongoose');
 const HealthRecord = require('../models/HealthRecord');
 const FamilyMember = require('../models/FamilyMember');
+const VectorChunk = require('../models/VectorChunk');
 const { checkInteractions } = require('../services/interactionService');
+const { generateEmbedding } = require('../services/embeddingService');
 
 /**
  * Controller for POST /api/profiles/:profileId/records
@@ -100,11 +102,73 @@ async function createRecord(req, res) {
     const newRecord = new HealthRecord(recordData);
     await newRecord.save();
 
+    // Send response immediately to keep the save operation fast
     res.status(201).json({
       success: true,
-      message: 'Health record saved successfully.',
+      message: 'Health record saved successfully. Processing embeddings in the background.',
       data: newRecord
     });
+
+    // Fire-and-forget: Asynchronously generate and save VectorChunks
+    (async () => {
+      try {
+        const chunksToSave = [];
+        const profileName = profile.firstName + (profile.lastName ? ' ' + profile.lastName : '');
+        const eventDateStr = type === 'PRESCRIPTION' 
+          ? (prescribedDate ? new Date(prescribedDate).toDateString() : 'an unknown date')
+          : (testDate ? new Date(testDate).toDateString() : 'an unknown date');
+
+        if (type === 'PRESCRIPTION') {
+          const docName = prescribingDoctor || 'a doctor';
+          for (const med of medicines) {
+            const chunkText = `On ${eventDateStr}, ${profileName} was prescribed ${med.medicineName} by ${docName}. ` +
+              `Dosage: ${med.dosage && med.dosage !== 'UNREADABLE' ? med.dosage : 'Not specified'}, ` +
+              `Frequency: ${med.frequency && med.frequency !== 'UNREADABLE' ? med.frequency : 'Not specified'}, ` +
+              `Duration: ${med.duration && med.duration !== 'UNREADABLE' ? med.duration : 'Not specified'}. ` +
+              `Instructions: ${med.doctorNotes && med.doctorNotes !== 'UNREADABLE' ? med.doctorNotes : 'None'}.`;
+            
+            const embedding = await generateEmbedding(chunkText);
+            chunksToSave.push({
+              profileId,
+              recordId: newRecord._id,
+              text: chunkText,
+              embedding,
+              metadata: { type: 'PRESCRIPTION', sourceImageUrl }
+            });
+          }
+        } else if (type === 'LAB_REPORT') {
+          for (const test of labTests) {
+            const abnormalStr = test.isAbnormalFlag ? 'This result was flagged as abnormal. ' : '';
+            const chunkText = `On ${eventDateStr}, ${profileName} had a lab test for ${test.testName}. ` +
+              `The result was ${test.value && test.value !== 'UNREADABLE' ? test.value : 'unknown'} ${test.unit && test.unit !== 'UNREADABLE' ? test.unit : ''}. ` +
+              `The reference range is ${test.referenceRange && test.referenceRange !== 'UNREADABLE' ? test.referenceRange : 'Not specified'}. ${abnormalStr}`;
+            
+            const embedding = await generateEmbedding(chunkText);
+            chunksToSave.push({
+              profileId,
+              recordId: newRecord._id,
+              text: chunkText,
+              embedding,
+              metadata: { type: 'LAB_REPORT', sourceImageUrl }
+            });
+          }
+        }
+
+        if (chunksToSave.length > 0) {
+          await VectorChunk.insertMany(chunksToSave);
+          // Mark as successfully embedded for durability tracking
+          newRecord.chunksGenerated = true;
+          await newRecord.save();
+        } else {
+          // If there were no chunks to save, consider it generated
+          newRecord.chunksGenerated = true;
+          await newRecord.save();
+        }
+      } catch (embeddingError) {
+        console.error('Background Vector Chunk Generation Failed:', embeddingError);
+        // chunksGenerated remains false on the record
+      }
+    })();
   } catch (error) {
     console.error('Create Record Error:', error);
     
@@ -181,4 +245,39 @@ async function getRecords(req, res) {
   }
 }
 
-module.exports = { createRecord, getRecords };
+/**
+ * Controller for GET /api/profiles/:profileId/records/:recordId
+ * Fetches a single health record for citation viewing.
+ */
+async function getRecordById(req, res) {
+  try {
+    const { profileId, recordId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(profileId) || !mongoose.Types.ObjectId.isValid(recordId)) {
+      return res.status(400).json({ message: 'Invalid profile or record ID format.' });
+    }
+
+    const profile = await FamilyMember.findById(profileId);
+    if (!profile) return res.status(404).json({ message: 'Profile not found.' });
+
+    if (profile.accountId.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Not authorized to view records for this profile.' });
+    }
+
+    const record = await HealthRecord.findOne({ _id: recordId, profileId });
+    if (!record) return res.status(404).json({ message: 'Health record not found.' });
+
+    res.json({
+      success: true,
+      data: record
+    });
+  } catch (error) {
+    console.error('Get Record By ID Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error fetching record details'
+    });
+  }
+}
+
+module.exports = { createRecord, getRecords, getRecordById };
