@@ -1,9 +1,9 @@
+require('dotenv').config();
 const mongoose = require('mongoose');
 const MedicineKB = require('../models/MedicineKB');
 const InteractionsKB = require('../models/InteractionsKB');
 const connectDB = require('../config/db');
 const { generateEmbedding } = require('../services/embeddingService');
-require('dotenv').config();
 
 // MOCK DATASET (In a real scenario, this would be read from a CSV or JSON file)
 const rawIndianMedicines = [

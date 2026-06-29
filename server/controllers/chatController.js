@@ -1,13 +1,26 @@
 const mongoose = require('mongoose');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenAI } = require('@google/genai');
 const FamilyMember = require('../models/FamilyMember');
 const VectorChunk = require('../models/VectorChunk');
 const MedicineKB = require('../models/MedicineKB');
 const ChatSession = require('../models/ChatSession');
 const { generateEmbedding } = require('../services/embeddingService');
 
-const apiKey = process.env.GEMINI_API_KEY;
-const genAI = new GoogleGenerativeAI(apiKey);
+// Lazy-initialized singleton — created on first call, not at require() time.
+let ai = null;
+
+function getAI() {
+  if (!ai) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        'GEMINI_API_KEY is not configured. Ensure dotenv has loaded before calling chat.'
+      );
+    }
+    ai = new GoogleGenAI({ apiKey });
+  }
+  return ai;
+}
 
 // Strict Grounding Threshold (Named constant as requested)
 const GROUNDING_THRESHOLD = 0.70;
@@ -162,18 +175,18 @@ INSTRUCTIONS:
     }
 
     // Initialize Gemini Chat
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash",
-      systemInstruction: contextString
-    });
-    
-    const chat = model.startChat({
+    const client = getAI();
+    const chat = client.chats.create({
+      model: 'gemini-2.0-flash',
+      config: {
+        systemInstruction: contextString
+      },
       history: geminiHistory
     });
 
     // 7. Execute LLM
-    const result = await chat.sendMessage(message);
-    let llmResponse = result.response.text();
+    const result = await chat.sendMessage({ message });
+    let llmResponse = result.text;
 
     // 8. Citation ID Validation & Stripping Hallucinations
     // Regex matches [SOURCE:id]

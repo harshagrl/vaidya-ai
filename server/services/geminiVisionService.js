@@ -1,6 +1,20 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenAI } = require('@google/genai');
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Lazy-initialized singleton — created on first call, not at require() time.
+let ai = null;
+
+function getAI() {
+  if (!ai) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error(
+        'GEMINI_API_KEY is not configured. Ensure dotenv has loaded before calling vision extraction.'
+      );
+    }
+    ai = new GoogleGenAI({ apiKey });
+  }
+  return ai;
+}
 
 const PRESCRIPTION_PROMPT = `
 You are a highly precise medical extraction AI.
@@ -86,7 +100,7 @@ function validateShape(parsedData, type) {
  * Internal method to perform a single extraction attempt
  */
 async function attemptExtraction(cloudinaryUrl, mimeType, type) {
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
+  const client = getAI();
 
   // Fetch the file buffer from the Cloudinary URL
   const response = await fetch(cloudinaryUrl);
@@ -97,15 +111,24 @@ async function attemptExtraction(cloudinaryUrl, mimeType, type) {
 
   const prompt = type === 'PRESCRIPTION' ? PRESCRIPTION_PROMPT : LAB_REPORT_PROMPT;
 
-  const filePart = {
-    inlineData: {
-      data: buffer.toString('base64'),
-      mimeType
-    }
-  };
-
-  const result = await model.generateContent([prompt, filePart]);
-  const responseText = result.response.text();
+  const result = await client.models.generateContent({
+    model: 'gemini-2.0-flash',
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { text: prompt },
+          {
+            inlineData: {
+              data: buffer.toString('base64'),
+              mimeType
+            }
+          }
+        ]
+      }
+    ]
+  });
+  const responseText = result.text;
   
   // Clean up potential markdown wrappers (e.g., ```json ... ```)
   const jsonString = responseText.replace(/```json/gi, '').replace(/```/gi, '').trim();

@@ -52,7 +52,7 @@ const healthRecordSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Pre-save validation hook to ensure correct arrays are populated based on record type
-healthRecordSchema.pre('save', function(next) {
+healthRecordSchema.pre('save', function() {
   let err = null;
   if (this.type === 'PRESCRIPTION') {
     if (!this.medicines || this.medicines.length === 0) {
@@ -70,9 +70,8 @@ healthRecordSchema.pre('save', function(next) {
 
   if (err) {
     err.isRecordValidation = true;
-    return next(err);
+    throw err;
   }
-  next();
 });
 
 module.exports = mongoose.model('HealthRecord', healthRecordSchema);
