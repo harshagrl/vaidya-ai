@@ -112,7 +112,7 @@ async function attemptExtraction(cloudinaryUrl, mimeType, type) {
   const prompt = type === 'PRESCRIPTION' ? PRESCRIPTION_PROMPT : LAB_REPORT_PROMPT;
 
   const result = await client.models.generateContent({
-    model: 'gemini-2.0-flash',
+    model: 'gemini-2.5-flash',
     contents: [
       {
         role: 'user',

@@ -58,7 +58,7 @@ router.post('/register', async (req, res) => {
   try {
     const payload = { user: { id: newUserId } };
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: 360000 });
-    res.json({ token });
+    res.json({ token, user: { id: newUserId, email, firstName, lastName } });
   } catch (err) {
     console.error('JWT Signing Error:', err.message);
     res.status(500).send('Server error generating token');
@@ -83,7 +83,7 @@ router.post('/login', async (req, res) => {
     const payload = { user: { id: user.id } };
     jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: 360000 }, (err, token) => {
       if (err) throw err;
-      res.json({ token });
+      res.json({ token, user: { id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName } });
     });
   } catch (err) {
     console.error(err.message);

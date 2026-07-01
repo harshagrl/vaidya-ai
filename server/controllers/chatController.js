@@ -177,7 +177,7 @@ INSTRUCTIONS:
     // Initialize Gemini Chat
     const client = getAI();
     const chat = client.chats.create({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-2.5-flash',
       config: {
         systemInstruction: contextString
       },

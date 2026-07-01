@@ -23,5 +23,17 @@ app.use('/api/upload', require('./routes/upload'));
 app.use('/api/profiles', require('./routes/profiles'));
 app.use('/api/profiles/:profileId/records', require('./routes/records'));
 app.use('/api/profiles/:profileId/chat', require('./routes/chat'));
+
+// Global error handler — catches any unhandled errors from middleware (e.g. multer)
+// that would otherwise produce Express's default "[object Object]" response.
+// Must be defined AFTER all routes (Express identifies error handlers by their 4 parameters).
+app.use((err, req, res, next) => {
+  console.error('Unhandled Server Error:', err.message, err.stack);
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'An unexpected server error occurred.'
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
